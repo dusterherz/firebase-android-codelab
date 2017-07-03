@@ -51,6 +51,7 @@ import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
+import com.google.firebase.analytics.FirebaseAnalytics;
 import com.google.firebase.appindexing.Action;
 import com.google.firebase.appindexing.FirebaseAppIndex;
 import com.google.firebase.appindexing.FirebaseUserActions;
@@ -121,6 +122,7 @@ public class MainActivity extends AppCompatActivity
     private DatabaseReference mFirebaseDatabaseReference;
     private FirebaseRecyclerAdapter<FriendlyMessage, MessageViewHolder> mFirebaseAdapter;
     private FirebaseRemoteConfig mFirebaseRemoteConfig;
+    private FirebaseAnalytics mFirebaseAnalytics;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -306,6 +308,8 @@ public class MainActivity extends AppCompatActivity
         mFirebaseRemoteConfig.setConfigSettings(firebaseRemoteConfigSettings);
         mFirebaseRemoteConfig.setDefaults(defaultConfigMap);
         fetchConfig();
+
+        mFirebaseAnalytics = FirebaseAnalytics.getInstance(this);
     }
 
     private void fetchConfig() {
@@ -369,9 +373,15 @@ public class MainActivity extends AppCompatActivity
             });
         } else if (requestCode == REQUEST_INVITE) {
             if (resultCode == RESULT_OK) {
+                Bundle payload = new Bundle();
+                payload.putString(FirebaseAnalytics.Param.VALUE, "sent");
+                mFirebaseAnalytics.logEvent(FirebaseAnalytics.Event.SHARE, payload);
                 String[] ids = AppInviteInvitation.getInvitationIds(resultCode, data);
                 Log.d(TAG, "Invitations sent:" + ids.length);
             } else {
+                Bundle payload = new Bundle();
+                payload.putString(FirebaseAnalytics.Param.VALUE, "not send");
+                mFirebaseAnalytics.logEvent(FirebaseAnalytics.Event.SHARE, payload);
                 Log.w(TAG, "Failed to send invitation.");
             }
         }
