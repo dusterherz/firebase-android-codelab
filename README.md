@@ -1,4 +1,4 @@
-# firebase-android-codelab
+# Firebase Android Codelab
 A little repository to make the Codelab for Firebase on Android
 
 # Why this on GitHub ?
@@ -11,4 +11,4 @@ All my collegues talk everyday of it. I needed a little API for an Android app, 
 
 # How far I am ?
 
-Just started.
+I've finished the tutorial. Now, I'm starting my own app with it !
