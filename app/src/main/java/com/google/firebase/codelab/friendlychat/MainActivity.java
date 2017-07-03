@@ -47,12 +47,21 @@ import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
 import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.Task;
+import com.google.firebase.appindexing.Action;
+import com.google.firebase.appindexing.FirebaseAppIndex;
+import com.google.firebase.appindexing.FirebaseUserActions;
+import com.google.firebase.appindexing.Indexable;
+import com.google.firebase.appindexing.builders.Indexables;
+import com.google.firebase.appindexing.builders.PersonBuilder;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.storage.FirebaseStorage;
 import com.google.firebase.storage.StorageReference;
+import com.google.firebase.storage.UploadTask;
 
 import de.hdodenhof.circleimageview.CircleImageView;
 
@@ -142,6 +151,15 @@ public class MainActivity extends AppCompatActivity
                 mFirebaseDatabaseReference.child(MESSAGES_CHILD)
         ) {
             @Override
+            protected FriendlyMessage parseSnapshot(DataSnapshot snapshot) {
+                FriendlyMessage friendlyMessage = super.parseSnapshot(snapshot);
+                if (friendlyMessage != null) {
+                    friendlyMessage.setId(snapshot.getKey());
+                }
+                return friendlyMessage;
+            }
+
+            @Override
             protected void populateViewHolder(final MessageViewHolder messageViewHolder, FriendlyMessage friendlyMessage, int i) {
                 mProgressBar.setVisibility(ProgressBar.INVISIBLE);
                 if (friendlyMessage.getText() != null) {
@@ -180,6 +198,7 @@ public class MainActivity extends AppCompatActivity
                 }
 
                 messageViewHolder.messengerTextView.setText(friendlyMessage.getName());
+
                 if (friendlyMessage.getPhotoUrl() == null) {
                     messageViewHolder.messengerImageView.setImageDrawable(ContextCompat.getDrawable(
                             MainActivity.this, R.drawable.ic_account_circle_black_36dp));
@@ -189,6 +208,12 @@ public class MainActivity extends AppCompatActivity
                             .into(messageViewHolder.messengerImageView);
                 }
 
+                if (friendlyMessage.getText() != null) {
+                    FirebaseAppIndex.getInstance()
+                            .update(getMessageIndexable(friendlyMessage));
+                }
+                FirebaseAppIndex.getInstance().update(getMessageIndexable(friendlyMessage));
+                FirebaseUserActions.getInstance().end(getMessageViewAction(friendlyMessage));
             }
         };
         mFirebaseAdapter.registerAdapterDataObserver(new RecyclerView.AdapterDataObserver() {
@@ -235,7 +260,14 @@ public class MainActivity extends AppCompatActivity
         mSendButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                // Send messages on click.
+                FriendlyMessage friendlyMessage = new
+                        FriendlyMessage(mMessageEditText.getText().toString(),
+                                        mUsername,
+                                        mPhotoUrl,
+                                        null);
+                mFirebaseDatabaseReference.child(MESSAGES_CHILD)
+                        .push().setValue(friendlyMessage);
+                mMessageEditText.setText("");
             }
         });
 
@@ -243,9 +275,43 @@ public class MainActivity extends AppCompatActivity
         mAddMessageImageView.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                // Select image for image message on click.
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("image/*");
+                startActivityForResult(intent, REQUEST_IMAGE);
             }
         });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, final Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        Log.d(TAG, "onActivityResult: requestCode"  + requestCode + ", resultCode=" + resultCode);
+        if (requestCode == REQUEST_IMAGE && resultCode == RESULT_OK && data != null) {
+            final Uri uri = data.getData();
+            Log.d(TAG, "Uri :" + uri.toString());
+            FriendlyMessage tempMessage = new FriendlyMessage(null, mUsername, mPhotoUrl,
+                    LOADING_IMAGE_URL);
+            mFirebaseDatabaseReference.child(MESSAGES_CHILD).push()
+                    .setValue(tempMessage, new DatabaseReference.CompletionListener() {
+                        @Override
+                        public void onComplete(DatabaseError databaseError,
+                                               DatabaseReference databaseReference) {
+                            if (databaseError == null) {
+                                String key = databaseReference.getKey();
+                                StorageReference storageReference =
+                                        FirebaseStorage.getInstance()
+                                        .getReference(mFirebaseUser.getUid())
+                                        .child(key)
+                                        .child(uri.getLastPathSegment());
+                                putImageInStorage(storageReference, uri, key);
+                            } else {
+                                Log.w(TAG, "Unable to write a message into the db.",
+                                        databaseError.toException());
+                            }
+                        }
+            });
+        }
     }
 
     @Override
@@ -297,5 +363,52 @@ public class MainActivity extends AppCompatActivity
         // be available.
         Log.d(TAG, "onConnectionFailed:" + connectionResult);
         Toast.makeText(this, "Google Play Services error.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void putImageInStorage(StorageReference storageReference, Uri uri, final String key) {
+        storageReference.putFile(uri).addOnCompleteListener(MainActivity.this,
+                new OnCompleteListener<UploadTask.TaskSnapshot>() {
+                    @Override
+                    public void onComplete(@NonNull Task<UploadTask.TaskSnapshot> task) {
+                        if (task.isSuccessful()){
+                            FriendlyMessage friendlyMessage =
+                                    new FriendlyMessage(null, mUsername, mPhotoUrl,
+                                            task.getResult().getMetadata().getDownloadUrl()
+                                                .toString());
+                            mFirebaseDatabaseReference.child(MESSAGES_CHILD).child(key)
+                                    .setValue(friendlyMessage);
+                        } else {
+                            Log.w(TAG, "image upload task was not successful.", task.getException());
+                        }
+                    }
+                });
+    }
+
+    private Indexable getMessageIndexable(FriendlyMessage friendlyMessage) {
+
+        PersonBuilder sender = Indexables.personBuilder()
+                .setIsSelf(mUsername.equals(friendlyMessage.getName()))
+                .setName(friendlyMessage.getName())
+                .setUrl(MESSAGE_URL.concat(friendlyMessage.getId() + "/sender"));
+
+        PersonBuilder recipient = Indexables.personBuilder()
+                .setName(mUsername)
+                .setUrl(MESSAGE_URL.concat(friendlyMessage.getId() + "/recipient"));
+
+        Indexable messageToIndex = Indexables.messageBuilder()
+                .setName(friendlyMessage.getText())
+                .setUrl(MESSAGE_URL.concat(friendlyMessage.getId()))
+                .setSender(sender)
+                .setRecipient(recipient)
+                .build();
+
+        return messageToIndex;
+    }
+
+    private Action getMessageViewAction(FriendlyMessage friendlyMessage) {
+        return new Action.Builder(Action.Builder.VIEW_ACTION)
+                .setObject(friendlyMessage.getName(), MESSAGE_URL.concat(friendlyMessage.getId()))
+                .setMetadata(new Action.Metadata.Builder().setUpload(false))
+                .build();
     }
 }
